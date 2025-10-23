@@ -1,4 +1,5 @@
 # Dependency directories
+mem_images/
 node_modules/
 jspm_packages/
 
