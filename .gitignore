@@ -1,0 +1,15 @@
+# Исключить все файлы и папки, кроме явно нужных для prod
+.node_modules
+.env
+.src
+
+# Оставить только нужные (dist, logs, LICENSE, README.md, package.json, package-lock.json)
+!LICENSE
+!README.md
+!package.json
+!package-lock.json
+!dist/
+!logs/
+
+# Исключить внутренности node_modules (не нужно для деплоя через git)
+node_modules/
