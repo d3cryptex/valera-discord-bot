@@ -12,7 +12,6 @@ import fs from 'fs';
 registerFont(path.join(__dirname, '../../fonts/impact.ttf'), { family: 'Impact' });
 
 const emotionRules: { pattern: RegExp, emoji: string }[] = [
-    // Позитив и реакция на успех
     { pattern: /спасибо|thanks|спс|thx|благодар/i, emoji: '🙏' },
     { pattern: /привет|hello|hi|ку|хай|дарова|здоров/i, emoji: '👋' },
     { pattern: /смешно|ахах|лол|ха[хx]+|rжу|lmao|rofl|funny|giggle|угар|умор/i, emoji: '🤣' },
@@ -23,100 +22,161 @@ const emotionRules: { pattern: RegExp, emoji: string }[] = [
     { pattern: /поздрав|grats|congrats|побед/i, emoji: '🏆' },
     { pattern: /флекс|флексишь|зафлексил/i, emoji: '💪' },
     { pattern: /виба|vibe|вайб|вайбин/i, emoji: '😎' },
-    { pattern: /реально|real|реал/i, emoji: '🤔' }, // юзеры часто пишут "реально?" как рефлексию
+    { pattern: /реально|real|реал/i, emoji: '🤔' }, 
     { pattern: /бог|аллах|holy|godlike|свят/i, emoji: '🙏' },
-    // Молодёжные кринжовые слова
     { pattern: /кринж|cringe|зашквар|стыд|стыдно|нулевый/i, emoji: '🫠' },
     { pattern: /чел|bro|бро|эй/i, emoji: '🧑' },
     { pattern: /капец|жесть|треш|omg|ужас|капец|fml|wtf|omg/i, emoji: '😱' },
     { pattern: /слаб|fail|лох|слабак|noob|нуб/i, emoji: '🥲' },
-    // Мат/ругательства (цензурно, просто 🚫 или 😶)
     { pattern: /(?:бл[я*]+|су[ккч]+|хер|пид[аое]+|гандон|долб|мудак|еба+|fuc?k|bitch|shit|asshole|хуй|соси|идиот)/i, emoji: '🚫' },
-    // Нейтральные реакции
     { pattern: /думаю|мысль|идея|suggest|предлагаю/i, emoji: '💡' },
     { pattern: /вопрос|кто|что|зачем|почему|какой|зачем|как|\?$/i, emoji: '❓' },
     { pattern: /ответ|ок|ok|ага|понял|ясно|договорились|пон/i, emoji: '👌' },
     { pattern: /ждать|жди|ожидание|позже|подожди|wait/i, emoji: '⏳' },
     { pattern: /да+|yes|угу/i, emoji: '✅' },
     { pattern: /нет+|неа|no+|never/i, emoji: '❌' },
-    // Прощание
     { pattern: /пока|bye|до встречи|goodbye|увидим|до свидания|счастливо|bb|bye bye/i, emoji: '👋' },
-    // Мемы/шутки
     { pattern: /мем|шутка|joke|mem|ржомба/i, emoji: '😏' },
     { pattern: /очу+мел|воу|офигеть|охренеть|серьёзно|жесть|wild/i, emoji: '🧐' },
-    // Упоминания бота
     { pattern: /бот|bot|искусственный интеллект|ai|chatgpt/i, emoji: '🤖' },
 ];
 
 export class MarkovService {
     private database: DatabaseService;
     private settingsService: SettingsService;
-    private readonly customEmojiRe = /<a?:\w{2,}:\d{17,20}>/g;                 // для поиска в тексте
-    private readonly customEmojiTokenRe = /^<a?:\w{2,}:\d{17,20}>$/;           // для проверки целого токена
-    private readonly uniEmojiRe = emojiRegex();                                // глобальный поиск Unicode-эмодзи
-    private readonly uniEmojiTokenRe = new RegExp(`^(?:${emojiRegex().source})$`); // проверка целого токена
+    private readonly customEmojiRe = /<a?:\w{2,}:\d{17,20}>/g;                 
+    private readonly customEmojiTokenRe = /^<a?:\w{2,}:\d{17,20}>$/;           
+    private readonly uniEmojiRe = emojiRegex();                                
+    private readonly uniEmojiTokenRe = new RegExp(`^(?:${emojiRegex().source})$`); 
+
+    private readonly MAX_MARKOV_RECORDS = 10000; 
+    private readonly CLEANUP_BATCH_SIZE = 1000;  
 
     constructor(database: DatabaseService, settingsService: SettingsService) {
         this.database = database;
         this.settingsService = settingsService;
     }
 
-    wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, font: string): string[] {
+    private async cleanupOldMarkovData(guildId: string): Promise<void> {
+      try {
+          const count = await this.database.countMarkovBigrams(guildId);
+          
+          if (count > this.MAX_MARKOV_RECORDS) {
+              const toDelete = count - this.MAX_MARKOV_RECORDS + this.CLEANUP_BATCH_SIZE;
+              await this.database.deleteOldestMarkovBigrams(guildId, toDelete);
+              logger.info(`Очищено ${toDelete} старых Markov записей для guild ${guildId}`);
+          }
+      } catch (error) {
+          logger.error('Ошибка очистки старых Markov данных:', error);
+      }
+    }
+
+    private wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, font: string): string[] {
       ctx.font = font;
-      const words: string[] = text.split(' ').filter(Boolean);
+
+      const cleanText = this.cleanTextForCanvas(text);
+      const words: string[] = cleanText.split(' ').filter(Boolean);
       let lines: string[] = [];
       let currentLine: string = words.length > 0 ? words[0]! : '';
+      
       for (let i = 1; i < words.length; i++) {
           const word: string = words[i] || '';
-          const width = ctx.measureText(currentLine + ' ' + word).width;
+          const testLine = currentLine + ' ' + word;
+          const width = ctx.measureText(testLine).width;
+          
           if (width < maxWidth) {
-              currentLine += ' ' + word;
+              currentLine = testLine;
           } else {
               lines.push(currentLine);
-              currentLine = word || '';
+              currentLine = word;
           }
       }
+      
       if (currentLine !== '') lines.push(currentLine);
       return lines;
     }
 
-    fitFontSize(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, baseSize: number, fontFamily: string, minSize: number = 14): number {
+    private cleanTextForCanvas(text: string): string {
+      return text
+          .replace(this.customEmojiRe, '') 
+          .replace(this.uniEmojiRe, '')    
+          .replace(/\s+/g, ' ')          
+          .trim();
+    }
+
+    private fitFontSize(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, baseSize: number, fontFamily: string, minSize: number = 14): number {
       let fontSize = baseSize;
+      const cleanText = this.cleanTextForCanvas(text);
+      
       ctx.font = `bold ${fontSize}px ${fontFamily}`;
-      if (ctx.measureText(text).width <= maxWidth) return fontSize;
+      if (ctx.measureText(cleanText).width <= maxWidth) return fontSize;
+      
       while (fontSize > minSize) {
           ctx.font = `bold ${fontSize}px ${fontFamily}`;
-          if (ctx.measureText(text).width <= maxWidth) break;
+          if (ctx.measureText(cleanText).width <= maxWidth) break;
           fontSize -= 2;
       }
-      return fontSize;
-    } 
+      return Math.max(fontSize, minSize);
+    }
+
+    private async safeLoadImage(imagePath: string): Promise<any | null> {
+      try {
+          if (!fs.existsSync(imagePath)) {
+              logger.warn(`Файл изображения не найден: ${imagePath}`);
+              return null;
+          }
+
+          const ext = path.extname(imagePath).toLowerCase();
+          const supportedFormats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
+          
+          if (!supportedFormats.includes(ext)) {
+              logger.warn(`Неподдерживаемый формат изображения: ${imagePath}`);
+              return null;
+          }
+
+          return await loadImage(imagePath);
+      } catch (error) {
+          logger.error(`Ошибка загрузки изображения ${imagePath}:`, error);
+          return null;
+      }
+    }
 
     async makeMultiImageMeme(imagePaths: string[], topText: string, bottomText: string): Promise<Buffer> {
-      imagePaths = imagePaths.filter(p => p && typeof p === 'string' && fs.existsSync(p) && p.length > 0);
-      if (!imagePaths.length) throw new Error('Нет валидных изображений для мема');
+      const validPaths = imagePaths.filter(p => p && typeof p === 'string' && fs.existsSync(p));
+      if (!validPaths.length) throw new Error('Нет валидных изображений для мема');
 
-      const images = await Promise.all(imagePaths.map(p => loadImage(p)));
-      const width = images.reduce((sum, img) => sum + img.width, 0);
-      const height = Math.max(...images.map(img => img.height));
+      const imagePromises = validPaths.map(p => this.safeLoadImage(p));
+      const loadedImages = await Promise.all(imagePromises);
+      const images = loadedImages.filter(img => img !== null);
+
+      if (!images.length) throw new Error('Не удалось загрузить ни одного изображения');
+
+      const width = images.reduce((sum: number, img: any) => sum + img.width, 0);
+      const height = Math.max(...images.map((img: any) => img.height));
       const canvas = createCanvas(width, height);
       const ctx = canvas.getContext('2d');
+
       let x = 0;
       for (const img of images) {
           ctx.drawImage(img, x, 0);
           x += img.width;
       }
+
+      const cleanTopText = this.cleanTextForCanvas(topText);
+      const cleanBottomText = this.cleanTextForCanvas(bottomText);
   
-      // -- Верхний ТЕКСТ --
-      let fontFamily = 'Impact';
-      let maxTextWidth = width * 0.9;
-      let topFontSize = this.fitFontSize(ctx, topText.toUpperCase(), maxTextWidth, 50, fontFamily, 14);
-      let topLines = this.wrapText(ctx, topText.toUpperCase(), maxTextWidth, `bold ${topFontSize}px ${fontFamily}`);
-      let topY = 40;
+      // -- Top Text --
+      const fontFamily = 'Impact';
+      const maxTextWidth = width * 0.85; // Немного уменьшаем для отступов
+      const topFontSize = this.fitFontSize(ctx, cleanTopText, maxTextWidth, Math.min(50, width * 0.1), fontFamily, 14);
+      const topLines = this.wrapText(ctx, cleanTopText, maxTextWidth, `bold ${topFontSize}px ${fontFamily}`);
+      
+      let topY = topFontSize + 20;
       ctx.textAlign = 'center';
       ctx.strokeStyle = 'black';
       ctx.fillStyle = 'white';
-      ctx.lineWidth = 4;
+      ctx.lineWidth = Math.max(2, topFontSize / 12);
+
       for (const line of topLines) {
           ctx.font = `bold ${topFontSize}px ${fontFamily}`;
           ctx.strokeText(line, width / 2, topY);
@@ -124,56 +184,63 @@ export class MarkovService {
           topY += topFontSize + 5;
       }
   
-      // -- Нижний ТЕКСТ --
-      let bottomFontSize = this.fitFontSize(ctx, bottomText.toUpperCase(), maxTextWidth, 50, fontFamily, 14);
-      let bottomLines = this.wrapText(ctx, bottomText.toUpperCase(), maxTextWidth, `bold ${bottomFontSize}px ${fontFamily}`);
-      let bottomY = height - bottomLines.length * bottomFontSize - 20;
+      // -- Bottom Text --
+      const bottomFontSize = this.fitFontSize(ctx, cleanBottomText, maxTextWidth, Math.min(50, width * 0.1), fontFamily, 14);
+      const bottomLines = this.wrapText(ctx, cleanBottomText, maxTextWidth, `bold ${bottomFontSize}px ${fontFamily}`);
+      
+      let bottomY = height - (bottomLines.length * (bottomFontSize + 5)) - 20;
+      ctx.lineWidth = Math.max(2, bottomFontSize / 12);
+
       for (const line of bottomLines) {
-          ctx.font = `bold ${bottomFontSize}px ${fontFamily}`;
-          ctx.strokeText(line, width / 2, bottomY);
-          ctx.fillText(line, width / 2, bottomY);
-          bottomY += bottomFontSize + 5;
+        ctx.font = `bold ${bottomFontSize}px ${fontFamily}`;
+        ctx.strokeText(line, width / 2, bottomY);
+        ctx.fillText(line, width / 2, bottomY);
+        bottomY += bottomFontSize + 5;
       }
   
       return canvas.toBuffer();
     }
 
     async makeOverlayMeme(mainPath: string, overlayPaths: string[], topText: string, bottomText: string): Promise<Buffer> {
-      if (!mainPath || !fs.existsSync(mainPath)) throw new Error('Главное изображение отсутствует: ' + mainPath);
-      // Грузим главное изображение
-      const mainImg = await loadImage(mainPath);
-    
-      // Создаем холст по размеру главной картинки
+      const mainImg = await this.safeLoadImage(mainPath);
+      if (!mainImg) throw new Error('Главное изображение не загружено: ' + mainPath);
+
       const canvas = createCanvas(mainImg.width, mainImg.height);
       const ctx = canvas.getContext('2d');
       ctx.drawImage(mainImg, 0, 0);
-    
-      // Масштаб и позиция оверлеев — можно подобрать под свой стиль
-      const overlaySize = Math.floor(mainImg.width * 0.45); // 45% ширины от главной
-      let overlayY = Math.floor(mainImg.height * 0.15); // Чуть ниже верхнего края
+
+      const overlaySize = Math.floor(mainImg.width * 0.3); 
+      let overlayY = Math.floor(mainImg.height * 0.1);
+        
       for (const path of overlayPaths) {
-        const overlay = await loadImage(path);
-        // Вставляем поверх, с небольшим отступом (правый верх или низ)
-        const overlayX = Math.floor(mainImg.width * 0.55);
-        ctx.drawImage(overlay, overlayX, overlayY, overlaySize, overlaySize);
-        overlayY += Math.floor(overlaySize * 1.1); // по вертикали вторую кладем ниже (если несколько)
+          const overlay = await this.safeLoadImage(path);
+          if (overlay) {
+              const overlayX = Math.floor(mainImg.width * 0.65);
+              ctx.drawImage(overlay, overlayX, overlayY, overlaySize, overlaySize);
+              overlayY += Math.floor(overlaySize * 1.1);
+          }
       }
-    
-      // Стиль текста: крупно, в две строки сверху и снизу
-      ctx.font = `bold ${Math.floor(mainImg.height * 0.08)}px Impact`;
+
+      const cleanTopText = this.cleanTextForCanvas(topText);
+      const cleanBottomText = this.cleanTextForCanvas(bottomText);
+
+      const fontSize = Math.floor(mainImg.height * 0.08);
+      ctx.font = `bold ${fontSize}px Impact`;
       ctx.fillStyle = 'white';
       ctx.strokeStyle = 'black';
       ctx.textAlign = 'center';
-      ctx.lineWidth = 2;
-    
-      // Верхний текст
-      ctx.fillText(topText.toUpperCase(), mainImg.width / 2, Math.floor(mainImg.height * 0.09));
-      ctx.strokeText(topText.toUpperCase(), mainImg.width / 2, Math.floor(mainImg.height * 0.09));
-    
-      // Нижний текст
-      ctx.fillText(bottomText.toUpperCase(), mainImg.width / 2, mainImg.height - Math.floor(mainImg.height * 0.04));
-      ctx.strokeText(bottomText.toUpperCase(), mainImg.width / 2, mainImg.height - Math.floor(mainImg.height * 0.04));
-    
+      ctx.lineWidth = Math.max(2, fontSize / 10);
+
+      // Top Text
+      const topY = Math.floor(mainImg.height * 0.12);
+      ctx.strokeText(cleanTopText.toUpperCase(), mainImg.width / 2, topY);
+      ctx.fillText(cleanTopText.toUpperCase(), mainImg.width / 2, topY);
+
+      // Bottom Text
+      const bottomY = mainImg.height - Math.floor(mainImg.height * 0.08);
+      ctx.strokeText(cleanBottomText.toUpperCase(), mainImg.width / 2, bottomY);
+      ctx.fillText(cleanBottomText.toUpperCase(), mainImg.width / 2, bottomY);
+
       return canvas.toBuffer();
     }
 
@@ -184,74 +251,73 @@ export class MarkovService {
     
         if (!message.guildId) return;
     
-        // --- Сначала: шанс на отправку случайной ГИФКИ ---
-        if (canSend && r < 0.07) { // например, 7% шанс на гифку отдельно
-          // Берем только gif-файлы из БД
-          const gifMetas = await this.database.MemeImage!.findAll({
-            where: {
-              guild_id: message.guildId,
-              original_url: { [Op.like]: '%.gif' }
-            },
-            raw: true
-          });
-          
-          if (gifMetas.length > 0) {
-            const chosen = gifMetas[Math.floor(Math.random() * gifMetas.length)];
-            if (chosen && chosen.original_url) {
-              await message.channel.send({ content: chosen.original_url });
+        if (canSend && r < 0.05) { // 5%
+          const gifUrl = await this.database.getRandomGif(message.guildId);
+          if (gifUrl) {
+              await message.channel.send({ content: gifUrl });
               return;
-            }
           }
-          // если в базе нет гифок, продолжаем обычную мем-логику ниже
         }
     
-        // --- Мем-изображение: шанс, что будет 1, 2 или 3 картинки для мемов ---
-        if (canSend && r < 0.13) {
-          const count = Math.floor(Math.random() * 3) + 1;
-          const imagePaths = await this.database.getRandomMemeImages(message.guildId, count)
-            .then(arr => arr.filter(p => !p.toLowerCase().endsWith('.gif'))); // исключаем гифки, только картинки
-    
-          if (imagePaths.length === 0) {
+        if (canSend && r < 0.08) { // 8%
+          const imagePaths = await this.database.getRandomImage(message.guildId, 1)
+              .then(arr => arr.filter(p => !p.toLowerCase().endsWith('.gif')));
 
-          } else if (imagePaths.length === 1) {
-              const topText = (await this.generateResponse(message.guildId, message.channelId)) || 'AI MEME!';
-              const bottomText = (await this.generateResponse(message.guildId, message.channelId)) || '';
-              const buffer = await this.makeMultiImageMeme(imagePaths, topText, bottomText);
-              const attachment = new AttachmentBuilder(buffer, { name: 'meme.png' });
-              await message.channel.send({ files: [attachment] });
-              return;
-          } else {
-              const overlayChance = 0.3; // 30%
-              if (Math.random() < overlayChance) {
-                  const [mainPath, ...overlays] = imagePaths;
-                  const topText = (await this.generateResponse(message.guildId, message.channelId)) || '';
-                  const bottomText = (await this.generateResponse(message.guildId, message.channelId)) || '';
-                  const buffer = await this.makeOverlayMeme(mainPath!, overlays, topText, bottomText);
-                  const attachment = new AttachmentBuilder(buffer, { name: 'meme_overlay.png' });
-                  await message.channel.send({ files: [attachment] });
-                  return;
-              } else {
+          if (imagePaths.length > 0) {
+              try {
                   const topText = (await this.generateResponse(message.guildId, message.channelId)) || 'AI MEME!';
                   const bottomText = (await this.generateResponse(message.guildId, message.channelId)) || '';
                   const buffer = await this.makeMultiImageMeme(imagePaths, topText, bottomText);
                   const attachment = new AttachmentBuilder(buffer, { name: 'meme.png' });
                   await message.channel.send({ files: [attachment] });
                   return;
+              } catch (error) {
+                  logger.error('Ошибка создания мема:', error);
+              }
+          }
+        }
+
+        if (canSend && r < 0.02) { // 2% 
+          const count = Math.floor(Math.random() * 2) + 2; 
+          const imagePaths = await this.database.getRandomImage(message.guildId, count)
+              .then(arr => arr.filter(p => !p.toLowerCase().endsWith('.gif')));
+
+          if (imagePaths.length >= 2) {
+              try {
+                  const overlayChance = 0.15; // 15%
+                  if (Math.random() < overlayChance) {
+                      const [mainPath, ...overlays] = imagePaths;
+                      const topText = (await this.generateResponse(message.guildId, message.channelId)) || '';
+                      const bottomText = (await this.generateResponse(message.guildId, message.channelId)) || '';
+                      const buffer = await this.makeOverlayMeme(mainPath!, overlays, topText, bottomText);
+                      const attachment = new AttachmentBuilder(buffer, { name: 'meme_overlay.png' });
+                      await message.channel.send({ files: [attachment] });
+                      return;
+                  } else {
+                      const topText = (await this.generateResponse(message.guildId, message.channelId)) || '';
+                      const bottomText = (await this.generateResponse(message.guildId, message.channelId)) || '';
+                      const buffer = await this.makeMultiImageMeme(imagePaths, topText, bottomText);
+                      const attachment = new AttachmentBuilder(buffer, { name: 'meme.png' });
+                      await message.channel.send({ files: [attachment] });
+                      return;
+                  }
+              } catch (error) {
+                  logger.error('Ошибка создания мультимема:', error);
               }
           }
         }
     
         // --- Обычный текстовый ответ AI ---
-        if (r < 0.43 && canSend) {
-          await message.reply({
-            content: aiText,
-            allowedMentions: { repliedUser: true }
-          });
-          if (r < 0.2) await this.reactToMessageSmart(message);
-        } else if (r < 0.83 && canSend) {
-          await message.channel.send({ content: aiText });
+        if (r < 0.35 && canSend) { // 35%
+            await message.reply({
+              content: aiText,
+              allowedMentions: { repliedUser: true }
+            });
+            if (r < 0.15) await this.reactToMessageSmart(message); // 15%
+        } else if (r < 0.65 && canSend) { // 65%
+            await message.channel.send({ content: aiText });
         } else if (canSend) {
-          await this.reactToMessageSmart(message);
+            await this.reactToMessageSmart(message);
         }
       } catch (error) {
         logger.error('sendAIReply error:', error);
@@ -262,46 +328,54 @@ export class MarkovService {
         try {
           const msg = message.content.toLowerCase();
       
-          // 1. По кастомным правилам
           const found = emotionRules.find(r => r.pattern.test(msg));
           if (found) {
-            await message.react(found.emoji);
-            // Для extra-флекса (пример для смеха)
+            await this.safeReact(message, found.emoji);
+            
+            // Дополнительные реакции
             if (/ахах|лол|haha|rжу|funny/i.test(msg)) {
-              await message.react('😂');
-              await message.react('🤣');
+                await this.safeReact(message, '😂');
             }
-            // Для жести и кринжа — два emoji: кринж + 🤦‍♂️
             if (/кринж|cringe/i.test(msg)) {
-              await message.react('🤦‍♂️');
+                await this.safeReact(message, '🤦‍♂️');
             }
-            // Для побед и успеха — комбинированный вариант
             if (/топ|лучше|класс|топчик|побед/i.test(msg)) {
-              await message.react('🥇');
+                await this.safeReact(message, '🥇');
             }
-            // Для ругательств — ещё “😶”
             if (found.emoji === '🚫') {
-              await message.react('😶');
+                await this.safeReact(message, '😶');
             }
             return;
           }
       
-          // 2. Повторяем emoji юзера (если есть)
-          const userEmojis = msg.match(/\p{Emoji}/gu) || [];
+          const userEmojis = msg.match(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu) || [];
           if (userEmojis.length > 0 && userEmojis[0]) {
-            await message.react(userEmojis[0]);
-            return;
+              await this.safeReact(message, userEmojis[0]);
+              return;
           }
-          // 3. Позитив/негатив анализ, если ничего не совпало по паттернам
+
           let pos = 0, neg = 0;
           if (/(супер|молодец|отлично|удачно|мило|клево|good|nice|amazing|great|happy|изи|gj)/i.test(msg)) pos++;
           if (/(бред|дефект|ошибка|fail|фейл|печаль|грусть|trouble|bad|poor|слабо|печально|жесть|капец|wtf)/i.test(msg)) neg++;
-          if (pos > neg) await message.react('😃');
-          else if (neg > pos) await message.react('😢');
-          else await message.react('🤔');
+          
+          if (pos > neg) await this.safeReact(message, '😃');
+          else if (neg > pos) await this.safeReact(message, '😢');
+          else await this.safeReact(message, '🤔');
         } catch (error) {
           logger.error('reactToMessageSmart error:', error);
         }
+    }
+
+    private async safeReact(message: Message, emoji: string): Promise<void> {
+      try {
+          await message.react(emoji);
+      } catch (error: any) {
+          if (error.code === 10014) { 
+              logger.warn(`Неизвестный emoji: ${emoji}`);
+          } else {
+              logger.error('Ошибка реакции:', error);
+          }
+      }
     }
 
     private STOPWORDS = new Set(['и', 'а', 'но', ',', '.', '!', '?', '-', '']);
@@ -314,13 +388,17 @@ export class MarkovService {
       try {
           const tokens = this.tokenize(content);
           if (tokens.length < 3) return;
+
           for (let i = 0; i < tokens.length - 2; i++) {
               const prev = tokens[i];
               const curr = tokens[i + 1];
               const next = tokens[i + 2];
               if (!prev || !curr || !next) continue;
-              await this.database.addMarkovBigram(guildId, prev, curr, next); // функция по аналогии с твоими addMarkovData
+              await this.database.addMarkovBigram(guildId, prev, curr, next); 
           }
+          
+          await this.cleanupOldMarkovData(guildId);
+
           logger.debug(`Trained Markov bigram chain with ${tokens.length} tokens from guild ${guildId}`);
       } catch (error) {
           logger.error('Error training Markov bigram chain:', error);
@@ -329,10 +407,8 @@ export class MarkovService {
 
     private async getRandomBigramStart(guildId: string): Promise<[string, string] | null> {
       const candidates: [string, string][] = await this.database.getBigramStartCandidates(guildId);
-      // фильтруем только по стоп-словам!
       const filtered = candidates.filter(([prev, curr]: [string, string]) =>
-          !this.STOPWORDS.has(curr) &&
-          !this.STOPWORDS.has(prev)
+          !this.STOPWORDS.has(curr) && !this.STOPWORDS.has(prev)
       );
       if (filtered.length === 0) return null;
       const idx = Math.floor(Math.random() * filtered.length);
@@ -351,10 +427,11 @@ export class MarkovService {
           if (!startPair) return null;
           let [prev, curr] = startPair;
           const tokens: string[] = [prev, curr];
+
           for (let i = 0; i < maxWords - 2; i++) {
               const options = await this.database.getMarkovBigramOptions(guildId, prev, curr);
               if (!options || Object.keys(options).length === 0) break;
-              // weighted random
+
               const next = this.weightedRandomChoiceBigram(options) || '';
               if (this.STOPWORDS.has(next)) break;
               tokens.push(next);
@@ -362,8 +439,9 @@ export class MarkovService {
               curr = next;
               if (this.isEndWord(next)) break;
           }
+
           if (tokens.length < minWords) return null;
-          // Умная склейка без пробела перед знаками препинания
+
           let result = '';
           for (let i = 0; i < tokens.length; i++) {
               const t = tokens[i] || '';
@@ -378,20 +456,17 @@ export class MarkovService {
     }
   
     private tokenize(text: string): string[] {
-      // 1) Мягкая очистка: убираем упоминания, ссылки, @everyone/@here
       const cleaned = text
-        .replace(/<@[!&]?\d+>/g, '')           // упоминания пользователей/ролей
-        .replace(/https?:\/\/\S+/gi, '')       // ссылки
-        .replace(/@(everyone|here)/gi, '');    // массовые упоминания
+        .replace(/<@[!&]?\d+>/g, '')           
+        .replace(/https?:\/\/\S+/gi, '')       
+        .replace(/@(everyone|here)/gi, '');    
   
-      // 2) Собираем токены: кастомные эмодзи, Unicode-эмодзи, слова/числа, финальная пунктуация
       const pattern = new RegExp(
         `${this.customEmojiRe.source}|${this.uniEmojiRe.source}|[A-Za-zА-Яа-яЁё0-9]+|[.,!?-]+`,
         'g'
       );
       const tokens = cleaned.match(pattern) ?? [];
   
-      // 3) Приводим к нижнему регистру только «слова», эмодзи не трогаем
       return tokens.map(t =>
         (this.customEmojiTokenRe.test(t) || this.uniEmojiTokenRe.test(t)) ? t : t.toLowerCase()
       );

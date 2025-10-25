@@ -8,16 +8,6 @@ import path from 'path';
 import { DateTime } from 'luxon';
 import { updateBattlePassProgress } from '../services/battlepass/updateBattlePassProgress';
 
-function rotateTasks(tasks: any[], max: number, dayOffset: number): any[] {
-    if (tasks.length === 0) return [];
-    const offset = (dayOffset * max) % tasks.length;
-    let rotated = [];
-    for (let i = 0; i < max && tasks.length > 0; i++) {
-      rotated.push(tasks[(offset + i) % tasks.length]);
-    }
-    return rotated;
-}
-
 export default async function messageCreate(bot: DiscordBot, message: Message): Promise<void> {
     if (message.author.bot || !message.guild || !message.channel.isTextBased()) return;
 
@@ -41,7 +31,8 @@ export default async function messageCreate(bot: DiscordBot, message: Message): 
         if (message.attachments.size > 0) {
             await saveImagesFromMessage(message, bot);
         }
-        await saveGifsFromEmbedsAndContent(message, bot);
+        
+        await saveGifsFromMessage(message, bot);
 
         const contentLength = message.content?.length ?? 0;
         const memberRoleIds = message.member?.roles.cache.map(r => r.id) ?? [];
@@ -100,7 +91,6 @@ export default async function messageCreate(bot: DiscordBot, message: Message): 
 
             if (response && response.length > 3) {
                 try {
-                    // Проверяем что канал поддерживает sendTyping
                     if ('sendTyping' in message.channel) {
                         await message.channel.sendTyping();
                     }
@@ -124,7 +114,6 @@ export default async function messageCreate(bot: DiscordBot, message: Message): 
 
 async function saveImagesFromMessage(message: Message, bot: DiscordBot) {
     try {
-        // Создаем папку, если её нет
         const imagesDir = './mem_images';
         if (!fs.existsSync(imagesDir)) {
             fs.mkdirSync(imagesDir, { recursive: true });
@@ -139,27 +128,23 @@ async function saveImagesFromMessage(message: Message, bot: DiscordBot) {
               
             if (!isImage && !isGif) continue;
 
-            // Присваиваем правильное расширение (gif/jpeg/png/...)
             const ext =
                 path.extname(attachment.name ?? (isGif ? '.gif' : '.png'));
             const fileName = `${message.id}_${attachment.id}${ext}`;
             const filePath = path.join(imagesDir, fileName);
 
             try {
-                // Скачиваем файл (и гифки, и картинки)
                 const response = await fetch(attachment.url);
                 const buffer = Buffer.from(await response.arrayBuffer());
                 fs.writeFileSync(filePath, buffer);
 
-                // Сохраняем метаданные в БД (можешь добавить тип если нужно)
-                await bot.database.saveMemeImage({
+                await bot.database.saveImageOrGif({
                     guildId: message.guild!.id,
                     channelId: message.channel.id,
                     messageId: message.id,
                     userId: message.author.id,
                     filePath: filePath,
                     originalUrl: attachment.url,
-                    // isGif: isGif // если нужно
                 });
 
                 logger.debug(`Saved meme file: ${fileName}`);
@@ -172,38 +157,36 @@ async function saveImagesFromMessage(message: Message, bot: DiscordBot) {
     }
 }
 
-async function saveGifsFromEmbedsAndContent(message: Message, bot: DiscordBot) {
+async function saveGifsFromMessage(message: Message, bot: DiscordBot) {
     try {
-        // 1. From embeds (GIPHY, TENOR, etc.)
         for (const embed of message.embeds) {
             let gifUrl: string | undefined = undefined;
             if (embed.url && embed.url.endsWith('.gif')) gifUrl = embed.url;
             else if (embed.image?.url && embed.image.url.endsWith('.gif')) gifUrl = embed.image.url;
             else if (embed.thumbnail?.url && embed.thumbnail.url.endsWith('.gif')) gifUrl = embed.thumbnail.url;
 
-            // Сохраняем ТОЛЬКО прямую .gif ссылку!
             if (gifUrl) {
-                await bot.database.saveMemeImage({
+                await bot.database.saveImageOrGif({
                     guildId: message.guild!.id,
                     channelId: message.channel.id,
                     messageId: message.id,
                     userId: message.author.id,
-                    filePath: '', // либо не пиши, либо special-type
+                    filePath: '', 
                     originalUrl: gifUrl
                 });
                 logger.debug(`[GIF EMBED] Saved original url: ${gifUrl}`);
             }
         }
-        // 2. From текстовых ссылок .gif в сообщении
+
         const possibleGifUrls = message.content.match(/https?:\/\/\S+\.gif/g);
         if (possibleGifUrls) {
             for (const url of possibleGifUrls) {
-                await bot.database.saveMemeImage({
+                await bot.database.saveImageOrGif({
                     guildId: message.guild!.id,
                     channelId: message.channel.id,
                     messageId: message.id,
                     userId: message.author.id,
-                    filePath: '', // либо не пиши, либо special-type
+                    filePath: '', 
                     originalUrl: url
                 });
                 logger.debug(`[GIF TEXT] Saved original url: ${url}`);
@@ -217,10 +200,10 @@ async function saveGifsFromEmbedsAndContent(message: Message, bot: DiscordBot) {
 function containsInappropriateContent(content: string): boolean {
     const inappropriatePatterns = [
         /@(everyone|here)/i,
-        /https?:\/\//i, // URL
-        /<@[!&]?\d+>/i, // Упоминания
-        /```/, // Код-блоки
-        /^\s*$/, // Пустые или пробельные
+        /https?:\/\//i, 
+        /<@[!&]?\d+>/i, 
+        /```/,
+        /^\s*$/, 
     ];
 
     return inappropriatePatterns.some(pattern => pattern.test(content));

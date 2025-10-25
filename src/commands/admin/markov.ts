@@ -32,6 +32,11 @@ export const data = new SlashCommandBuilder()
             .setName('meme')
             .setDescription('Создать мем из последних изображений и AI-текста')
     )
+    .addSubcommand(subcommand =>
+        subcommand
+            .setName('gif')
+            .setDescription('Отправить GIF из базы бота')
+    )
 
 export async function execute(interaction: ChatInputCommandInteraction, bot: DiscordBot) {
     const settingsService = new SettingsService(bot.database, bot.redis);
@@ -61,6 +66,9 @@ export async function execute(interaction: ChatInputCommandInteraction, bot: Dis
         case 'meme':
             await handleMeme(interaction, bot);
             break;
+        case 'gif':
+            await handleGIF(interaction, bot);
+            break;
     }
 }
 
@@ -75,13 +83,13 @@ async function handleMeme(interaction: ChatInputCommandInteraction, bot: Discord
   
       // 1-3 картинки случайно, можно option заменить на строгое значение
       const count = Math.floor(Math.random() * 3) + 1;
-      const imagePaths = await bot.database.getRandomMemeImages(interaction.guildId, count);
+      const imagePaths = await bot.database.getRandomImage(interaction.guildId, count);
   
       if (!imagePaths.length) {
         const embed = new EmbedBuilder()
           .setColor('#eb4034')
           .setTitle('Ошибка')
-          .setDescription('❌ Нет сохранённых картинок на сервере!');
+          .setDescription('❌ Нет сохранённых картинок!');
         await interaction.editReply({ embeds: [embed] });
         return;
       }
@@ -111,6 +119,38 @@ async function handleMeme(interaction: ChatInputCommandInteraction, bot: Discord
         .setColor('#eb4034')
         .setTitle('Ошибка')
         .setDescription('❌ Произошла ошибка при создании мема.');
+  
+      await interaction.editReply({ embeds: [embed] });
+    }
+}
+
+async function handleGIF(interaction: ChatInputCommandInteraction, bot: DiscordBot) {
+    await interaction.deferReply();
+  
+    try {
+      if (!interaction.guildId) {
+        await interaction.editReply({ content: 'Мемы работают только на серверах!' });
+        return;
+      }
+  
+      const gifUrl = await bot.database.getRandomGif(interaction.guildId);
+
+      if (!gifUrl) {
+        const embed = new EmbedBuilder()
+          .setColor('#eb4034')
+          .setTitle('Ошибка')
+          .setDescription('❌ Нет сохранённых гифок!');
+        await interaction.editReply({ embeds: [embed] });
+        return;
+      }
+  
+      await interaction.editReply({ content: gifUrl });
+    } catch (error) {
+      logger.error('Error sending GIF:', error);
+      const embed = new EmbedBuilder()
+        .setColor('#eb4034')
+        .setTitle('Ошибка')
+        .setDescription('❌ Произошла ошибка при отправки gif.');
   
       await interaction.editReply({ embeds: [embed] });
     }

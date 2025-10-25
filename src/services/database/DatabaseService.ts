@@ -333,7 +333,7 @@ export class DatabaseService {
         }
     }
 
-    // Пользователи
+    // Users
     async getUser(userId: string): Promise<any> {
         if (!this.User) throw new Error('Database not connected');
         return await this.User.findByPk(userId);
@@ -396,7 +396,6 @@ export class DatabaseService {
         }
     }
 
-    // Возвращает стартовые пары [prev, curr] с частотой
     async getBigramStartCandidates(guildId: string): Promise<[string, string][]> {
         if (!this.MarkovBigram) throw new Error('Database not connected');
         const rows = await this.MarkovBigram.findAll({
@@ -411,7 +410,6 @@ export class DatabaseService {
             .map((row: any) => [row.prev_token as string, row.curr_token as string]);
     }
 
-    // Для данной пары (prev, curr) возвращает все варианты next_token с их frequency
     async getMarkovBigramOptions(
         guildId: string,
         prev: string,
@@ -429,7 +427,7 @@ export class DatabaseService {
         return options;
     }
 
-    async saveMemeImage(meta: {
+    async saveImageOrGif(meta: {
         guildId: string, channelId: string, messageId: string, userId: string,
         filePath: string, originalUrl: string
       }) {
@@ -445,7 +443,7 @@ export class DatabaseService {
         });
     }
 
-    async getRandomMemeImages(guildId: string, count: number): Promise<string[]> {
+    async getRandomImage(guildId: string, count: number): Promise<string[]> {
         if (!this.MemeImage) throw new Error('Database not connected');
         const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     
@@ -468,6 +466,51 @@ export class DatabaseService {
                 return allowedExts.includes(ext);
             })
             .slice(0, count);
+    }
+
+    async getRandomGif(guildId: string): Promise<string | null> {
+        if (!this.MemeImage || !this.sequelize) throw new Error('Database not connected');
+        
+        const gifs = await this.MemeImage.findAll({
+            where: {
+                guild_id: guildId,
+                original_url: { [Op.like]: '%.gif' }
+            },
+            order: this.sequelize.random(),
+            limit: 1,
+            raw: true
+        });
+    
+        return gifs.length > 0 ? gifs[0]!.original_url : null;
+    }
+
+    async countMarkovBigrams(guildId: string): Promise<number> {
+        if (!this.sequelize) throw new Error('Database not connected');
+        
+        const result = await this.sequelize.query<{ count: number }>(
+            'SELECT COUNT(*) as count FROM markov_bigrams WHERE guild_id = ?',
+            {
+                replacements: [guildId],
+                type: QueryTypes.SELECT
+            }
+        );
+        
+        return (result[0]?.count as number) || 0;
+    }
+    
+    async deleteOldestMarkovBigrams(guildId: string, count: number): Promise<void> {
+        if (!this.sequelize) throw new Error('Database not connected');
+        
+        await this.sequelize.query(
+            `DELETE FROM markov_bigrams 
+             WHERE guild_id = ? 
+             ORDER BY id ASC 
+             LIMIT ?`,
+            {
+                replacements: [guildId, count],
+                type: QueryTypes.DELETE
+            }
+        );
     }
 
     public async rawQuery<T = any>(sql: string, params?: any[]): Promise<T[]> {

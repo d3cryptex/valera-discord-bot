@@ -112,14 +112,6 @@ async function showAllSettings(interaction: ChatInputCommandInteraction, bot: Di
                     inline: true
                 },
                 {
-                    name: '📢 Каналы',
-                    value: `• AI-каналы: \`${settings.ai.channels.length || '🌐 Все'}\`\n` +
-                           `• Каналы для текстового XP: \`${settings.levels.xp_text.length || '🌐 Все'}\`\n` +
-                           `• Каналы для голосового XP: \`${settings.levels.xp_voice.length || '🌐 Все'}\`\n` +
-                           `• Игнорируемые каналы: \`${settings.levels.ignored.length != 0 ? settings.levels.ignored.length : '❌ Нету'}\``,
-                    inline: true
-                },
-                {
                     name: '🛡️ Модерация',
                     value: `• Автомодер.: ${settings.moderation.enabled ? '`🟢 Вкл.`' : '`🔴 Выкл`'}\n` +
                            `• Защита от спама: ${settings.moderation.spam_protection ? '`🟢 Вкл.`' : '`🔴 Выкл`'}\n` +
